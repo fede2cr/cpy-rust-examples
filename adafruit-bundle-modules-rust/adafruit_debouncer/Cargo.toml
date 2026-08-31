@@ -1,0 +1,17 @@
+[package]
+name = "adafruit_debouncer"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Rust implementation of the adafruit_debouncer CircuitPython bundle library"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# This natmod supplies the panic handler for both crates.
+adafruit_ticks = { path = "../adafruit_ticks", default-features = false }
+
+[dev-dependencies]
+# Host tests link std, so the dependency has to as well.
+adafruit_ticks = { path = "../adafruit_ticks", default-features = false, features = ["std"] }

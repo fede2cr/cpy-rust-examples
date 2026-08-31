@@ -1,0 +1,22 @@
+cargo-features = ["panic-immediate-abort"]
+
+[package]
+name = "circuitpython_rust_hello"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Minimal Rust-backed CircuitPython hello/calculator module prototype"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[profile.dev]
+# The staticlib artifact is no_std, which cannot use unwinding panics.
+panic = "abort"
+
+[profile.release]
+# immediate-abort keeps panic location/message statics out of .rodata, which the
+# native .mpy linker cannot relocate.
+panic = "immediate-abort"
+opt-level = "z"
+codegen-units = 1

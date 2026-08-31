@@ -1,0 +1,131 @@
+name: build
+
+# Tags starting with v also publish; see the release job at the bottom.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # The natmod build needs a CircuitPython tree only as a toolchain, but stock
+  # upstream cannot link a working Xtensa .mpy from Rust's output. This fork
+  # carries the two mpy_ld.py fixes; see "Why a fork" in the README.
+  CIRCUITPYTHON_REPO: fede2cr/circuitpython
+  # A branch would track new fixes automatically; a SHA is what makes an old tag
+  # still build the same bytes years later. Bump it deliberately.
+  CIRCUITPYTHON_REF: 26f6c63e0de631497f135e405a71a847f328de04
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: hello
+            crate: rust-module-demo
+          - module: adafruit_ticks
+            crate: adafruit-bundle-modules-rust/adafruit_ticks
+          - module: adafruit_debouncer
+            crate: adafruit-bundle-modules-rust/adafruit_debouncer
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check out CircuitPython
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.CIRCUITPYTHON_REPO }}
+          ref: ${{ env.CIRCUITPYTHON_REF }}
+          path: circuitpython
+          # py/ and tools/ are all the natmod build reads, and neither is a
+          # submodule, so the ports' submodules can stay unfetched.
+          submodules: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install the mpy_ld dependencies
+        # pyelftools reads the objects; `ar` reads the .a archives, and is only
+        # needed by modules that set LINK_RUNTIME, which is easy to miss.
+        run: pip install pyelftools ar
+
+      - name: Cache the Xtensa toolchains
+        id: esp-cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.rustup/toolchains/esp
+            ~/.espressif
+            ~/export-esp.sh
+          key: espup-esp32s3-${{ runner.os }}-v1
+
+      - name: Install espup and the esp toolchain
+        if: steps.esp-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -sSfL -o /tmp/espup \
+            https://github.com/esp-rs/espup/releases/latest/download/espup-x86_64-unknown-linux-gnu
+          chmod +x /tmp/espup
+          # Installs both halves: the Xtensa Rust fork (as toolchain `esp`) and
+          # the xtensa-esp32s3-elf GCC the .mpy link step needs.
+          /tmp/espup install --targets esp32s3 --export-file "$HOME/export-esp.sh"
+
+      - name: Report the toolchain
+        run: |
+          . "$HOME/export-esp.sh"
+          cargo +esp --version
+          xtensa-esp32s3-elf-gcc --version | head -1
+
+      - name: Test
+        run: |
+          . "$HOME/export-esp.sh"
+          # --lib skips the doctest pass, which would build the no_std lib with
+          # unwinding panics.
+          cd "${{ matrix.crate }}" && cargo +esp test --lib
+
+      - name: Build ${{ matrix.module }}.mpy
+        run: |
+          . "$HOME/export-esp.sh"
+          make -C "${{ matrix.crate }}/natmod" \
+            MPY_DIR="$GITHUB_WORKSPACE/circuitpython" \
+            PYTHON="$(which python)"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.module }}
+          path: ${{ matrix.crate }}/natmod/${{ matrix.module }}.mpy
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: mpy
+          merge-multiple: true
+
+      - name: Note which firmware these load on
+        run: |
+          ls -l mpy/
+          cat > NOTES.md <<'EOF'
+          Native `.mpy` modules for **ESP32-S3** (`ARCH = xtensawin`).
+
+          A native `.mpy` is architecture-specific and version-specific. These
+          will not load on another chip family, and the firmware must have been
+          built with `CIRCUITPY_ENABLE_MPY_NATIVE=1`, which is off by default.
+
+          Copy the file to the CIRCUITPY drive, at the top level or in `lib/`.
+          EOF
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: mpy/*.mpy
+          body_path: NOTES.md
+          generate_release_notes: true

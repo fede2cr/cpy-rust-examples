@@ -1,0 +1,16 @@
+[package]
+name = "adafruit_ticks"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Rust implementation of the adafruit_ticks CircuitPython bundle library"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[features]
+default = ["panic-handler"]
+# Off when another natmod crate links this one in, so there is only one handler.
+panic-handler = []
+# On when this crate is a dependency of another crate's host test build.
+std = []

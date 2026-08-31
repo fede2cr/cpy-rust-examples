@@ -1,0 +1,16 @@
+cargo-features = ["panic-immediate-abort"]
+
+[workspace]
+resolver = "2"
+members = ["adafruit_ticks", "adafruit_debouncer"]
+
+[profile.dev]
+# The staticlib artifacts are no_std, which cannot use unwinding panics.
+panic = "abort"
+
+[profile.release]
+# immediate-abort keeps panic location/message statics out of .rodata, which the
+# native .mpy linker cannot relocate.
+panic = "immediate-abort"
+opt-level = "z"
+codegen-units = 1

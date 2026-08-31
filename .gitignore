@@ -1,0 +1,8 @@
+target/
+.venv/
+
+# natmod build output
+build/
+*.mpy
+.mpy_ld_cache
+*.mpy
