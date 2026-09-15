@@ -8,13 +8,22 @@ thin MicroPython C shim binding them to the interpreter.
 | `hello` | [rust-module-demo](rust-module-demo) | The smallest useful example: strings, integers, floats and a raised exception across the boundary |
 | `adafruit_ticks` | [adafruit-bundle-modules-rust](adafruit-bundle-modules-rust/adafruit_ticks) | A Rust port of the Adafruit bundle's `adafruit_ticks` |
 | `adafruit_debouncer` | [adafruit-bundle-modules-rust](adafruit-bundle-modules-rust/adafruit_debouncer) | A Rust port of the Adafruit bundle's `adafruit_debouncer` |
+| `pixels_rs` | [mandelbrot-rust](mandelbrot-rust) | A fixed-point Mandelbrot kernel, built to measure Rust against `@micropython.viper` |
 
-All of them target **ESP32-S3** (`ARCH = xtensawin`). A native `.mpy` is built
-per architecture, so these will not load on another chip family, and the
-firmware has to have been built with `CIRCUITPY_ENABLE_MPY_NATIVE=1`, which is
-off by default.
+A native `.mpy` is built per architecture, so none of these will load on another
+chip family, and the firmware has to have been built with
+`CIRCUITPY_ENABLE_MPY_NATIVE=1`, which is off by default on every port.
 
-Prebuilt modules are attached to each [release](../../releases).
+| Architecture | Boards | Modules |
+| --- | --- | --- |
+| `xtensawin` | QT Py ESP32-S3 and other ESP32-S3 boards | all four |
+| `armv7emsp` | Metro M7 1011, Metro M4 Express, muzi Base Duo | `pixels_rs` only |
+
+Only `mandelbrot-rust` is built for both; the other three Makefiles pin
+themselves to the ESP32-S3 cross compiler.
+
+Prebuilt modules are attached to each [release](../../releases), one zip per
+architecture.
 
 ## Building
 
@@ -24,6 +33,8 @@ place that a normal Rust build does not need:
 1. **The `esp` toolchain**, from [`espup`](https://github.com/esp-rs/espup).
    It supplies both the Xtensa Rust fork and the `xtensa-esp32s3-elf` GCC.
    `cargo +nightly` is not a substitute — see the module READMEs for why.
+   For an `armv7emsp` build this is replaced by a nightly Rust with the
+   `rust-src` component, plus `arm-none-eabi-gcc`.
 2. **A Python with `pyelftools` and `ar`**, because the linker is
    CircuitPython's `tools/mpy_ld.py`.
 3. **A CircuitPython tree** at `MPY_DIR`, from the
@@ -69,14 +80,3 @@ range of `[-0x40000, -4]` rather than silently wrapping.
 Both are upstream MicroPython bugs rather than CircuitPython ones, and neither
 has been submitted upstream yet. When they are, this can go back to a stock
 checkout.
-
-## CI
-
-[`.github/workflows/build.yml`](.github/workflows/build.yml) builds and tests
-every module on each push. Pushing a tag that starts with `v` runs the same
-build and then attaches the `.mpy` files to a GitHub release.
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```

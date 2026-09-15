@@ -19,6 +19,10 @@ env:
 
 jobs:
   build:
+    # A native .mpy is per architecture, not per board, so the matrix is over
+    # architectures. Only mandelbrot-rust builds for both: the other Makefiles
+    # pin themselves to the ESP32-S3 cross compiler with `override CROSS`.
+    name: ${{ matrix.module }} (${{ matrix.arch }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -26,10 +30,21 @@ jobs:
         include:
           - module: hello
             crate: rust-module-demo
+            arch: xtensawin
           - module: adafruit_ticks
             crate: adafruit-bundle-modules-rust/adafruit_ticks
+            arch: xtensawin
           - module: adafruit_debouncer
             crate: adafruit-bundle-modules-rust/adafruit_debouncer
+            arch: xtensawin
+          - module: pixels_rs
+            crate: mandelbrot-rust
+            arch: xtensawin
+            test_features: --features std
+          - module: pixels_rs
+            crate: mandelbrot-rust
+            arch: armv7emsp
+            test_features: --features std
 
     steps:
       - uses: actions/checkout@v7
@@ -54,6 +69,7 @@ jobs:
         run: pip install pyelftools ar
 
       - name: Cache the Xtensa toolchains
+        if: matrix.arch == 'xtensawin'
         id: esp-cache
         uses: actions/cache@v6
         with:
@@ -64,7 +80,7 @@ jobs:
           key: espup-esp32s3-${{ runner.os }}-v1
 
       - name: Install espup and the esp toolchain
-        if: steps.esp-cache.outputs.cache-hit != 'true'
+        if: matrix.arch == 'xtensawin' && steps.esp-cache.outputs.cache-hit != 'true'
         run: |
           curl -sSfL -o /tmp/espup \
             https://github.com/esp-rs/espup/releases/latest/download/espup-x86_64-unknown-linux-gnu
@@ -73,29 +89,53 @@ jobs:
           # the xtensa-esp32s3-elf GCC the .mpy link step needs.
           /tmp/espup install --targets esp32s3 --export-file "$HOME/export-esp.sh"
 
+      - name: Install the Arm toolchains
+        if: matrix.arch == 'armv7emsp'
+        run: |
+          sudo apt-get update
+          # Supplies arm-none-eabi-gcc and, through its dependencies, the ar the
+          # Makefile uses to unpack the Rust staticlib.
+          sudo apt-get install -y gcc-arm-none-eabi
+          # rust-src is what -Zbuild-std compiles core from. The target itself is
+          # built into rustc, so it needs no `rustup target add`.
+          rustup toolchain install nightly --component rust-src --profile minimal
+
       - name: Report the toolchain
         run: |
-          . "$HOME/export-esp.sh"
-          cargo +esp --version
-          xtensa-esp32s3-elf-gcc --version | head -1
+          if [ "${{ matrix.arch }}" = xtensawin ]; then
+            . "$HOME/export-esp.sh"
+            cargo +esp --version
+            xtensa-esp32s3-elf-gcc --version | head -1
+          else
+            cargo +nightly --version
+            arm-none-eabi-gcc --version | head -1
+          fi
 
       - name: Test
+        # Ordinary host tests, so once per module is enough. The second
+        # architecture would only run the same three tests again.
+        if: matrix.arch == 'xtensawin'
         run: |
           . "$HOME/export-esp.sh"
           # --lib skips the doctest pass, which would build the no_std lib with
           # unwinding panics.
-          cd "${{ matrix.crate }}" && cargo +esp test --lib
+          cd "${{ matrix.crate }}" && cargo +esp test --lib ${{ matrix.test_features }}
 
       - name: Build ${{ matrix.module }}.mpy
         run: |
-          . "$HOME/export-esp.sh"
+          # Only present on the Xtensa jobs; the Arm ones use the default rustup.
+          # An `&&` here would fail the step under `bash -e` when the file is absent.
+          if [ -f "$HOME/export-esp.sh" ]; then . "$HOME/export-esp.sh"; fi
           make -C "${{ matrix.crate }}/natmod" \
+            ARCH="${{ matrix.arch }}" \
             MPY_DIR="$GITHUB_WORKSPACE/circuitpython" \
             PYTHON="$(which python)"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.module }}
+          # The file has to stay named <module>.mpy for the import to find it,
+          # so the architecture goes in the artifact name instead.
+          name: ${{ matrix.module }}-${{ matrix.arch }}
           path: ${{ matrix.crate }}/natmod/${{ matrix.module }}.mpy
           if-no-files-found: error
 
@@ -108,24 +148,53 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          path: mpy
-          merge-multiple: true
+          path: artifacts
+          # Not merged: both architectures produce a pixels_rs.mpy, and merging
+          # would silently leave only one of them.
+          merge-multiple: false
+
+      - name: Group the modules by architecture
+        run: |
+          set -eu
+          for dir in artifacts/*/; do
+            name=$(basename "$dir")
+            # Artifact names are <module>-<arch>, and module names use
+            # underscores, so the last dash is the split point.
+            arch=${name##*-}
+            mkdir -p "release/$arch"
+            cp "$dir"/*.mpy "release/$arch/"
+          done
+          for dir in release/*/; do
+            arch=$(basename "$dir")
+            (cd release && zip -r "../mpy-$arch.zip" "$arch")
+          done
+          ls -lR release
+          ls -l ./*.zip
 
       - name: Note which firmware these load on
         run: |
-          ls -l mpy/
           cat > NOTES.md <<'EOF'
-          Native `.mpy` modules for **ESP32-S3** (`ARCH = xtensawin`).
+          Native `.mpy` modules, one archive per architecture.
 
-          A native `.mpy` is architecture-specific and version-specific. These
-          will not load on another chip family, and the firmware must have been
-          built with `CIRCUITPY_ENABLE_MPY_NATIVE=1`, which is off by default.
+          | Archive | Architecture | Boards |
+          | --- | --- | --- |
+          | `mpy-xtensawin.zip` | `xtensawin` | QT Py ESP32-S3, other ESP32-S3 boards |
+          | `mpy-armv7emsp.zip` | `armv7emsp` | Metro M7 1011, Metro M4 Express, muzi Base Duo (nRF52840) |
 
-          Copy the file to the CIRCUITPY drive, at the top level or in `lib/`.
+          A native `.mpy` is specific to an architecture and to the .mpy format
+          version. It will not load on another chip family, and the firmware has
+          to be built with `CIRCUITPY_ENABLE_MPY_NATIVE=1`, which is off by
+          default on every port.
+
+          Unzip and copy the `.mpy` to the CIRCUITPY drive, at the top level or
+          in `lib/`, keeping the filename as it is.
+
+          Only `pixels_rs` is published for both architectures; the others are
+          ESP32-S3 only.
           EOF
 
       - uses: softprops/action-gh-release@v3
         with:
-          files: mpy/*.mpy
+          files: ./*.zip
           body_path: NOTES.md
           generate_release_notes: true

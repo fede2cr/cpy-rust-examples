@@ -1,0 +1,31 @@
+cargo-features = ["panic-immediate-abort"]
+
+[workspace]
+
+[package]
+name = "pixels_rs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Fixed-point Mandelbrot kernel for comparing CircuitPython viper against a Rust native .mpy"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[features]
+default = ["panic-handler"]
+panic-handler = []
+# On when this crate is built for a host test run.
+std = []
+
+[profile.dev]
+# The staticlib artifact is no_std, which cannot use unwinding panics.
+panic = "abort"
+
+[profile.release]
+# immediate-abort keeps panic location/message statics out of .rodata, which the
+# native .mpy linker cannot relocate.
+panic = "immediate-abort"
+# This is the benchmark, so speed rather than the bundle crates' opt-level = "z".
+opt-level = 3
+codegen-units = 1
